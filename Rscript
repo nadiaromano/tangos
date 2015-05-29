@@ -1,0 +1,170 @@
+#init
+library(tm)
+libs<- c("plyr","class")
+lapply(libs, require, character.only=TRUE)
+
+#set options
+options(stringsAsFactors=FALSE)
+
+pathname<-"/Volumes/NadiaExt/solo letras"
+
+#clean corpus
+corpus<- Corpus(DirSource(directory=pathname, encoding = "ANSI"))
+
+corpus <-tm_map(corpus,removePunctuation)
+corpus <-tm_map(corpus, stripWhitespace)
+corpus <-tm_map(corpus,tolower)
+corpus <-tm_map(corpus,removeNumbers)
+corpus <-tm_map(corpus,removeWords, stopwords("spanish"))
+
+
+#remove stemming
+library(SnowballC)
+corpus.stem<-tm_map(corpus,stemDocument, language="spanish")
+
+#remove withespace due to stemming
+corpus.stem<- tm_map(corpus.stem,stripWhitespace)
+
+#check result
+inspect(corpus.stem[1])
+
+#build TDM (term document matrix)
+TDM <- TermDocumentMatrix(corpus.stem)
+
+#check TDM
+inspect(TDM[,1])     
+
+#build transpose of TDM -> DTM
+DTM <- DocumentTermMatrix(corpus.stem)
+
+#find frequent terms
+frequent_terms<-findFreqTerms(TDM,100)
+
+#find associations
+findAssocs(TDM, "amor", 0.15)
+
+#remove terms that do not occur often PREGUNTAR CUAL ES UN BUEN COEF. PROBAR. Cual es un buen nivel de sparcidad?
+TDM.common <- removeSparseTerms(TDM, 0.8)
+dim(TDM.common)
+inspect(TDM.common[1:10,1:5])
+
+#VISUALIZACION
+library(slam)
+
+#primero comprimimos la info en una matriz
+TDM.dense <- as.matrix(TDM.common)
+object.size(TDM.common)
+object.size(TDM.dense)
+
+#generate visualization
+library(ggplot2)
+heatmap<- ggplot(TDM.dense, aes(x = Docs, y = Terms, fill = log10(count))) +
+  geom_tile(colour = "white") +
+  scale_fill_gradient(high="#FF0000" , low="#FFFFFF")+
+  ylab("") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+heatmap
+
+#normalize matrix
+TDM.dense <- as.matrix(TDM.common)
+TDM.scaled <- TDM.dense / rowSums(TDM.dense)
+matTDM<-as.matrix(TDM.scaled)
+
+#cosine distance
+install.packages("lsa")
+library(lsa)
+matTDM.diss<-cosine(matTDM)
+
+
+
+#grafo consideramos cada tango un vértice
+#y para construir el grafo las aristas serían las similitudes obtenidas en la matriz.
+library(igraph)
+
+matTDM.sim<-(1- matTDM.diss)
+
+#definimos como cero aquellas que tienen una similitud < 0.3
+matTDM.sim[matTDM.sim< 0.6] <- 0
+red2 <- graph.adjacency(matTDM.diss, weighted=TRUE, diag=FALSE, mode="undirected")
+red <- graph.adjacency(matTDM.sim, weighted=TRUE, diag=FALSE, mode="undirected")
+
+#edge sequence
+head(E(red), 15)
+
+#caracteristicas de la red
+vcount(red)
+ecount(red)
+
+#esta conectado
+is.connected(red, mode="weak")
+is.connected(red, mode="strong")
+
+#grados de entrada y salida
+degree.in<-sort(degree(red, mode="in"))
+degree.out<-sort(degree(red, mode="out"))
+degree.all<-sort(degree(red, mode="all"))
+
+#relate degree in-out
+plot(degree(red, mode="in"), degree(red, mode="out"), pch=19, col="darkblue")
+
+#en forma interactiva
+identify(degree(red, mode="in"), degree(red, mode="out"), labels=V(red))
+
+#plot distribucion de grados
+plot(degree.distribution(red, cumulative = TRUE, mode="all"), type="l", xlab="grado", ylab="frec. acumulada")
+plot(degree.distribution(red, cumulative = FALSE, mode="all"),type="h", xlab="grado", ylab="frecuencia")
+points(degree.distribution(red, cumulative = FALSE, mode="all"))
+grados.hist<- hist(degree(red,mode="all"), main="distribución de grados")
+plot(cumsum(grados.hist$counts), type="o", main="distribución acumulada", pch=19, xlab=grados.hist$braks)
+
+#diametro de la red
+diameter(red, directed=F, unconnected=T)
+get.diameter(red, directed=F, unconnected=T)
+
+# ¿Cual es el camino que determina este diametro?
+V(red)[get.diameter(red, directed=F, unconnected=T)]
+
+#grado de intermediacion
+betweeness<-betweenness(red,directed=F)
+sort(betweenness(red,directed=F))
+
+#densidad de la red
+graph.density(red)
+
+#centralidad de autovector
+sort(evcent(red, directed=F, scale=T)$vector)
+
+
+
+###ajuste ley de potencias?
+plf.red <- power.law.fit(degree(red,mode="all"))
+plf.red$alpha
+plf.red$KS.p
+
+plf.red$xmin
+
+#es mayor el clustering a una red formada al azar?
+rg.transitivity <- array()
+for(i in 1:1000){
+  rg <- random.graph.game(43,196, type="gnm", directed=F)
+  rg.transitivity[i] <-  mean(transitivity(rg, "local", isolates="zero"))
+}
+red.transitivity <- mean(transitivity(red, "local", isolates="zero"))
+table(red.transitivity > rg.transitivity)
+
+#hay correlacion de grados?
+assortativity.degree(red, directed=F)
+
+#clique mas grande
+cliques <- largest.cliques(red)
+V(red)[cliques[[1]]]
+red.lc.1 <- induced.subgraph(red, V(red)[cliques[[1]]])
+plot(red.lc.1)
+
+cliques(red, max=7)
+
+#clustering
+red.wc.cm <- walktrap.community(red)
+red.eb.cm <- edge.betweenness.community(red,directed=F)
+red.sg.cm <- spinglass.community(red,spins=8)
